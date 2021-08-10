@@ -1,0 +1,10 @@
+[package]
+name = "tirefire"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+diesel = { version = "1.4.7", features = ["postgres", "r2d2", "chrono", "uuidv07"] }
+uuid="0.8.2"
