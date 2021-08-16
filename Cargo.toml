@@ -7,4 +7,4 @@ edition = "2018"
 
 [dependencies]
 diesel = { version = "1.4.7", features = ["postgres", "r2d2", "chrono", "uuidv07"] }
-uuid="0.8.2"
+uuid = { version = "0.8.2", features = ["serde", "v4"] }
