@@ -1,45 +1,37 @@
+#[allow(unused_imports)]
 #[macro_use]
 extern crate diesel;
-
 use diesel::pg::Pg;
 use diesel::prelude::*;
 use diesel::query_builder::*;
 use diesel::query_source::Table;
-use uuid::Uuid;
 
-table! {
-    use diesel::sql_types::*;
-
-    objects (id) {
-        id -> Uuid,
-        runtime -> Text,
-        gen -> Integer,
-    }
-}
-
-#[derive(Queryable)]
-struct Object {
-    pub id: Uuid,
-    pub runtime: String,
-    pub data: i32,
-}
-
+// QueryExistsMaybeUpdate
+//
 /// Wrapper around [`diesel::update`] for a Table, which allows
 /// callers to distinguish between "not found", "found but not updated", and
-/// "updated.
+/// "updated".
 pub trait ConditionalUpdate<K, U, V>
 where
     Self: Sized + Table,
 {
-    fn update_if(self, key: K, update_statement: UpdateStatement<Self, U, V>) -> ConditionallyUpdated<Self, K, U, V>;
+    fn query_exists_maybe_update(
+        self,
+        key: K,
+        update_statement: UpdateStatement<Self, U, V>,
+    ) -> ConditionallyUpdated<Self, K, U, V>;
 }
 
 impl<T, K, U, V> ConditionalUpdate<K, U, V> for T
 where
     T: Table,
 {
-    fn update_if(self, key: K, update_statement: UpdateStatement<Self, U, V>) -> ConditionallyUpdated<Self, K, U, V> {
-        ConditionallyUpdated  {
+    fn query_exists_maybe_update(
+        self,
+        key: K,
+        update_statement: UpdateStatement<Self, U, V>,
+    ) -> ConditionallyUpdated<Self, K, U, V> {
+        ConditionallyUpdated {
             table: self,
             update_statement,
             key,
@@ -48,8 +40,7 @@ where
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ConditionallyUpdated<T, K, U, V>
-{
+pub struct ConditionallyUpdated<T, K, U, V> {
     table: T,
     update_statement: UpdateStatement<T, U, V>,
     key: K,
@@ -61,17 +52,14 @@ where
 {
     // TODO: ... Wrong? We're returning two IDs right now
     // TODO: derive from primary
-    type SqlType = (diesel::sql_types::Uuid, diesel::sql_types::Uuid);
+    type SqlType = (); // diesel::sql_types::Uuid, diesel::sql_types::Uuid);
 }
 
-impl<T, K, U, V> RunQueryDsl<PgConnection> for ConditionallyUpdated<T, K, U, V>
-where
-    T: Table,
-{}
+impl<T, K, U, V> RunQueryDsl<PgConnection> for ConditionallyUpdated<T, K, U, V> where T: Table {}
 
 /// This implementation uses the following CTE:
 ///
-/// ```
+/// ```text
 /// // WITH found   AS (SELECT <primary key> FROM T WHERE <primary key = value>)
 /// //      updated AS (UPDATE T SET <constraints> RETURNING *)
 /// // SELECT
@@ -122,57 +110,68 @@ where
     }
 }
 
-// SIMPLIFIED
-// -------------
-// WITH found   AS (SELECT id FROM T WHERE id = 1),
-//      updated AS (UPDATE T SET generation = 2 WHERE id = 1 AND generation = 1 RETURNING *)
-// SELECT 'example: successful conditional update with CTE',
-//        found.id AS found_id,
-//        updated.id AS updated_id
-// FROM
-//        found
-// LEFT JOIN
-//        updated
-// ON
-//        found.id = updated.id;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
 
+    diesel::table! {
+        use diesel::sql_types::*;
 
+        objects (id) {
+            id -> Uuid,
+            runtime -> Text,
+            gen -> Integer,
+        }
+    }
 
-// ORIGINAL
-// ------------
-// WITH found   AS (SELECT id, generation FROM T WHERE id = 1),
-//      updated AS (UPDATE T SET generation = 2 WHERE id = 1 AND generation = 1 RETURNING *)
-// SELECT 'example: successful conditional update with CTE',
-//        found.id AS found_id,
-//        found.generation AS found_gen,
-//        updated.id AS updated_id,
-//        updated.generation AS updated_gen
-// FROM
-//         found
-// FULL OUTER JOIN
-//         updated
-// ON
-//         found.id = updated.id;
+    #[derive(Queryable)]
+    struct Object {
+        pub id: Uuid,
+        pub runtime: String,
+        pub data: i32,
+    }
 
-fn main() {
-    use objects::dsl;
+    #[test]
+    fn check_output() {
+        use objects::dsl;
+        /*
+        let connection = PgConnection::establish("pretend-i'm-a-URL").unwrap();
+        let _ = dsl::objects
+            .first::<Object>(&connection)
+            .unwrap();
+        */
 
-    /*
-    let connection = PgConnection::establish("pretend-i'm-a-URL").unwrap();
-    let _ = dsl::objects
-        .first::<Object>(&connection)
-        .unwrap();
-    */
+        let id = Uuid::new_v4();
+        let query = dsl::objects.query_exists_maybe_update(
+            id,
+            diesel::update(dsl::objects)
+                .filter(dsl::id.eq(id))
+                .filter(dsl::gen.ge(2))
+                .set(dsl::runtime.eq("new-runtime")),
+        );
 
-    let id = Uuid::new_v4();
-    let query = dsl::objects.update_if(
-        id,
-        diesel::update(
-            dsl::objects.filter(dsl::id.eq(id))
-                        .filter(dsl::gen.ge(2))
-        ).set(dsl::runtime.eq("new-runtime"))
-    );
+        println!("{}", diesel::debug_query::<Pg, _>(&query));
+        println!("{:#?}", diesel::debug_query::<Pg, _>(&query));
+    }
 
-    println!("{}", diesel::debug_query::<Pg, _>(&query));
-    println!("{:#?}", diesel::debug_query::<Pg, _>(&query));
+    #[test]
+    fn try_to_see_result() {
+        use objects::dsl;
+        let connection = PgConnection::establish("pretend-i'm-a-URL").unwrap();
+        let _ = dsl::objects
+            .first::<Object>(&connection)
+            .unwrap();
+
+        let instance_id = Uuid::new_v4();
+        let query = diesel::update(dsl::objects)
+            .filter(dsl::id.eq(instance_id))
+            .filter(dsl::gen.gt(3))
+            .set(dsl::runtime.eq("new-runtime"))
+            .query_exists_maybe_update(instance_id);
+
+        println!("{}", diesel::debug_query::<Pg, _>(&query));
+        println!("{:#?}", diesel::debug_query::<Pg, _>(&query));
+    }
+
 }
