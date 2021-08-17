@@ -47,20 +47,24 @@ impl<T, K, U, V> QueryId for UpdateAndQueryStatement<T, K, U, V> {
     fn query_id() -> Option<core::any::TypeId> { None }
 }
 
+/// Result of [`UpdateAndQueryStatement`].
 pub enum UpdateAndQueryResult {
+    /// The row exists and was updated.
     Updated,
+    /// The row exists, but was not updated.
     NotUpdatedButExists,
 }
 
 impl <T, K, U, V> UpdateAndQueryStatement<T, K, U, V>
 where
-    T: Table,
-    Pg: sql_types::HasSqlType<<Self as AsQuery>::SqlType>,
-    Self: AsQuery + RunQueryDsl<PgConnection>,
-    (<<T as Table>::PrimaryKey as Expression>::SqlType, <<T as Table>::PrimaryKey as Expression>::SqlType): QueryId,
-    <Self as AsQuery>::Query: QueryFragment<Pg> + QueryId,
-    (K, K): Queryable<<Self as AsQuery>::SqlType, Pg>,
+    // Necessary bound to compare primary keys:
     K: PartialEq,
+    // Bounds which ensure an impl of LoadQuery exists:
+    Pg: sql_types::HasSqlType<<Self as AsQuery>::SqlType>,
+    <Self as AsQuery>::Query: QueryFragment<Pg>,
+    (K, K): Queryable<<Self as AsQuery>::SqlType, Pg>,
+    // To actually implement QueryFragment, T must be a Table:
+    T: Table,
 {
     pub fn execute_and_check(self, conn: &PgConnection) -> Result<UpdateAndQueryResult, diesel::result::Error> {
         let results = self.load::<(K, K)>(conn)?;
@@ -120,7 +124,6 @@ where
         out.push_sql("SELECT");
 
         let name = <T::PrimaryKey as Column>::NAME;
-        // XXX parsed as found."id" updated."id"FROM found LEFT
         out.push_sql(" found.");
         out.push_identifier(name)?;
         out.push_sql(" updated.");
@@ -159,30 +162,19 @@ mod tests {
         pub data: i32,
     }
 
-    /*
     #[test]
     fn check_output() {
         use objects::dsl;
-        /*
-        let connection = PgConnection::establish("pretend-i'm-a-URL").unwrap();
-        let _ = dsl::objects
-            .first::<Object>(&connection)
-            .unwrap();
-        */
-
         let id = Uuid::new_v4();
-        let query = dsl::objects.check_if_exists(
-            id,
-            diesel::update(dsl::objects)
-                .filter(dsl::id.eq(id))
-                .filter(dsl::gen.ge(2))
-                .set(dsl::runtime.eq("new-runtime")),
-        );
+        let query = diesel::update(dsl::objects)
+            .filter(dsl::id.eq(id))
+            .filter(dsl::gen.ge(2))
+            .set(dsl::runtime.eq("new-runtime"))
+            .check_if_exists(id);
 
         println!("{}", diesel::debug_query::<Pg, _>(&query));
         println!("{:#?}", diesel::debug_query::<Pg, _>(&query));
     }
-    */
 
     #[test]
     fn try_to_see_result() {
@@ -192,12 +184,12 @@ mod tests {
             .first::<Object>(&connection)
             .unwrap();
 
-        let instance_id = Uuid::new_v4();
+        let id = Uuid::new_v4();
         let result = diesel::update(dsl::objects)
-            .filter(dsl::id.eq(instance_id))
+            .filter(dsl::id.eq(id))
             .filter(dsl::gen.gt(3))
             .set(dsl::runtime.eq("new-runtime"))
-            .check_if_exists(instance_id)
+            .check_if_exists(id)
             .execute_and_check(&connection)
             .unwrap();
     }
