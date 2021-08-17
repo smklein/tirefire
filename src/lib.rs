@@ -48,6 +48,7 @@ impl<T, K, U, V> UpdateCte<T, K, U, V> for UpdateStatement<T, U, V> {
 /// An UPDATE statement which can be combined (via a CTE)
 /// with other statements to also SELECT a row.
 #[derive(Debug, Clone, Copy)]
+#[must_use = "Queries must be executed"]
 pub struct UpdateAndQueryStatement<T, K, U, V> {
     update_statement: UpdateStatement<T, U, V>,
     key: K,
@@ -81,6 +82,13 @@ where
     // To actually implement QueryFragment, T must be a Table:
     T: Table,
 {
+
+    /// Issues the CTE and parses the result.
+    ///
+    /// The three outcomes are:
+    /// - Ok(Row exists and was updated)
+    /// - Ok(Row exists, but was not updated)
+    /// - Error (row doesn't exist, or other diesel error)
     pub fn execute_and_check(
         self,
         conn: &PgConnection,
