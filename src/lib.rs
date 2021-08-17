@@ -1,6 +1,7 @@
 #[allow(unused_imports)]
 #[macro_use]
 extern crate diesel;
+use diesel::associations::HasTable;
 use diesel::pg::Pg;
 use diesel::prelude::*;
 use diesel::query_builder::*;
@@ -11,29 +12,23 @@ use diesel::query_source::Table;
 /// Wrapper around [`diesel::update`] for a Table, which allows
 /// callers to distinguish between "not found", "found but not updated", and
 /// "updated".
-pub trait ConditionalUpdate<K, U, V>
-where
-    Self: Sized + Table,
-{
+pub trait ConditionalUpdate<T, K, U, V>: Sized {
     fn query_exists_maybe_update(
         self,
         key: K,
-        update_statement: UpdateStatement<Self, U, V>,
-    ) -> ConditionallyUpdated<Self, K, U, V>;
+    ) -> ConditionallyUpdated<T, K, U, V>;
 }
 
-impl<T, K, U, V> ConditionalUpdate<K, U, V> for T
+impl<T, K, U, V> ConditionalUpdate<T, K, U, V> for UpdateStatement<T, U, V>
 where
     T: Table,
 {
     fn query_exists_maybe_update(
         self,
         key: K,
-        update_statement: UpdateStatement<Self, U, V>,
-    ) -> ConditionallyUpdated<Self, K, U, V> {
+    ) -> ConditionallyUpdated<T, K, U, V> {
         ConditionallyUpdated {
-            table: self,
-            update_statement,
+            update_statement: self,
             key,
         }
     }
@@ -41,11 +36,11 @@ where
 
 #[derive(Debug, Clone, Copy)]
 pub struct ConditionallyUpdated<T, K, U, V> {
-    table: T,
     update_statement: UpdateStatement<T, U, V>,
     key: K,
 }
 
+/*
 impl<T, K, U, V> Query for ConditionallyUpdated<T, K, U, V>
 where
     T: Table,
@@ -54,6 +49,7 @@ where
     // TODO: derive from primary
     type SqlType = (); // diesel::sql_types::Uuid, diesel::sql_types::Uuid);
 }
+*/
 
 impl<T, K, U, V> RunQueryDsl<PgConnection> for ConditionallyUpdated<T, K, U, V> where T: Table {}
 
@@ -72,7 +68,7 @@ impl<T, K, U, V> RunQueryDsl<PgConnection> for ConditionallyUpdated<T, K, U, V> 
 /// // ON
 /// //        found.<primary_key> = updated.<primary_key>;
 /// ```
-impl<T, K, U, V> QueryFragment<Pg> for ConditionallyUpdated<T, K, U, V>
+impl<T: HasTable, K, U, V> QueryFragment<Pg> for ConditionallyUpdated<T, K, U, V>
 where
     T: Table + diesel::query_dsl::methods::FindDsl<K> + Copy,
     K: Copy,
@@ -82,7 +78,7 @@ where
 {
     fn walk_ast(&self, mut out: AstPass<Pg>) -> QueryResult<()> {
         out.push_sql("WITH found AS (");
-        self.table.find(self.key).walk_ast(out.reborrow())?;
+        T::table().find(self.key).walk_ast(out.reborrow())?;
         out.push_sql("), updated AS (");
         self.update_statement.walk_ast(out.reborrow())?;
         // TODO: Confirm the incoming Update has no RETURNING already...
@@ -132,6 +128,7 @@ mod tests {
         pub data: i32,
     }
 
+    /*
     #[test]
     fn check_output() {
         use objects::dsl;
@@ -154,6 +151,7 @@ mod tests {
         println!("{}", diesel::debug_query::<Pg, _>(&query));
         println!("{:#?}", diesel::debug_query::<Pg, _>(&query));
     }
+    */
 
     #[test]
     fn try_to_see_result() {
@@ -170,8 +168,6 @@ mod tests {
             .set(dsl::runtime.eq("new-runtime"))
             .query_exists_maybe_update(instance_id);
 
-        println!("{}", diesel::debug_query::<Pg, _>(&query));
-        println!("{:#?}", diesel::debug_query::<Pg, _>(&query));
     }
 
 }
