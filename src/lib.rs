@@ -226,4 +226,22 @@ mod tests {
             .unwrap();
         assert_eq!(result, UpdateAndQueryResult::NotUpdatedButExists);
     }
+
+    #[test]
+    fn try_load_the_query_ourselves() {
+        use objects::dsl;
+        let connection = PgConnection::establish("pretend-i'm-a-URL").unwrap();
+        let _ = dsl::objects.first::<Object>(&connection).unwrap();
+
+        let id = Uuid::new_v4();
+        let result = diesel::update(dsl::objects)
+            .filter(dsl::id.eq(id))
+            .filter(dsl::gen.gt(3))
+            .set(dsl::runtime.eq("new-runtime"))
+            .check_if_exists(id)
+            .load::<(Uuid, Uuid)>(&connection)
+            .unwrap();
+        let (_found_id, _updated_id) = result.get(0).unwrap();
+    }
+
 }
