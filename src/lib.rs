@@ -20,10 +20,7 @@ pub trait UpdateCte<T, K, U, V> {
     /// Nests the existing update statement in a CTE which
     /// identifies if the row exists (by ID), even if the row
     /// cannot be successfully updated.
-    fn check_if_exists(
-        self,
-        key: K,
-    ) -> UpdateAndQueryStatement<T, K, U, V>;
+    fn check_if_exists(self, key: K) -> UpdateAndQueryStatement<T, K, U, V>;
 }
 
 // UpdateStatement has four generic parameters:
@@ -40,10 +37,7 @@ pub trait UpdateCte<T, K, U, V> {
 // This allows our implementation of the CTE to overwrite
 // the return behavior of the SQL statement.
 impl<T, K, U, V> UpdateCte<T, K, U, V> for UpdateStatement<T, U, V> {
-    fn check_if_exists(
-        self,
-        key: K,
-    ) -> UpdateAndQueryStatement<T, K, U, V> {
+    fn check_if_exists(self, key: K) -> UpdateAndQueryStatement<T, K, U, V> {
         UpdateAndQueryStatement {
             update_statement: self,
             key,
@@ -62,7 +56,9 @@ pub struct UpdateAndQueryStatement<T, K, U, V> {
 impl<T, K, U, V> QueryId for UpdateAndQueryStatement<T, K, U, V> {
     type QueryId = ();
     const HAS_STATIC_QUERY_ID: bool = false;
-    fn query_id() -> Option<core::any::TypeId> { None }
+    fn query_id() -> Option<core::any::TypeId> {
+        None
+    }
 }
 
 /// Result of [`UpdateAndQueryStatement`].
@@ -74,7 +70,7 @@ pub enum UpdateAndQueryResult {
     NotUpdatedButExists,
 }
 
-impl <T, K, U, V> UpdateAndQueryStatement<T, K, U, V>
+impl<T, K, U, V> UpdateAndQueryStatement<T, K, U, V>
 where
     // Necessary bound to compare primary keys:
     K: PartialEq,
@@ -85,7 +81,10 @@ where
     // To actually implement QueryFragment, T must be a Table:
     T: Table,
 {
-    pub fn execute_and_check(self, conn: &PgConnection) -> Result<UpdateAndQueryResult, diesel::result::Error> {
+    pub fn execute_and_check(
+        self,
+        conn: &PgConnection,
+    ) -> Result<UpdateAndQueryResult, diesel::result::Error> {
         let results = self.load::<(K, K)>(conn)?;
         let ids = results.get(0).ok_or(diesel::result::Error::NotFound)?;
         if ids.0 == ids.1 {
@@ -100,9 +99,10 @@ impl<T, K, U, V> Query for UpdateAndQueryStatement<T, K, U, V>
 where
     T: Table,
 {
-type SqlType =
-    (<<T as Table>::PrimaryKey as Expression>::SqlType,
-     <<T as Table>::PrimaryKey as Expression>::SqlType);
+    type SqlType = (
+        <<T as Table>::PrimaryKey as Expression>::SqlType,
+        <<T as Table>::PrimaryKey as Expression>::SqlType,
+    );
 }
 
 impl<T, K, U, V> RunQueryDsl<PgConnection> for UpdateAndQueryStatement<T, K, U, V> where T: Table {}
@@ -124,7 +124,7 @@ impl<T, K, U, V> RunQueryDsl<PgConnection> for UpdateAndQueryStatement<T, K, U, 
 /// ```
 impl<T, K, U, V> QueryFragment<Pg> for UpdateAndQueryStatement<T, K, U, V>
 where
-    T: HasTable<Table=T> + Table + diesel::query_dsl::methods::FindDsl<K> + Copy,
+    T: HasTable<Table = T> + Table + diesel::query_dsl::methods::FindDsl<K> + Copy,
     K: Copy,
     <T as diesel::query_dsl::methods::FindDsl<K>>::Output: QueryFragment<Pg>,
     <T as Table>::PrimaryKey: diesel::Column,
@@ -136,8 +136,8 @@ where
         subquery.walk_ast(out.reborrow())?;
         out.push_sql("), updated AS (");
         self.update_statement.walk_ast(out.reborrow())?;
-        // TODO: Confirm the incoming Update has no RETURNING already...
-        // TODO: Only need primary?
+        // TODO: Only need primary? Or would we actually want
+        // to pass the returned rows back through the result?
         out.push_sql(" RETURNING *) ");
 
         out.push_sql("SELECT");
@@ -206,9 +206,7 @@ mod tests {
     fn try_to_see_result() {
         use objects::dsl;
         let connection = PgConnection::establish("pretend-i'm-a-URL").unwrap();
-        let _ = dsl::objects
-            .first::<Object>(&connection)
-            .unwrap();
+        let _ = dsl::objects.first::<Object>(&connection).unwrap();
 
         let id = Uuid::new_v4();
         let result = diesel::update(dsl::objects)
