@@ -11,7 +11,12 @@ use diesel::sql_types;
 /// Wrapper around [`diesel::update`] for a Table, which allows
 /// callers to distinguish between "not found", "found but not updated", and
 /// "updated".
-pub trait UpdateCte<T, K, U, V>: Sized {
+///
+/// T: Table on which the UpdateCte should be applied.
+/// K: Primary Key type.
+/// U: Where clause of the update statement.
+/// V: Changeset to be applied to the update statement.
+pub trait UpdateCte<T, K, U, V> {
     /// Nests the existing update statement in a CTE which
     /// identifies if the row exists (by ID), even if the row
     /// cannot be successfully updated.
@@ -21,6 +26,19 @@ pub trait UpdateCte<T, K, U, V>: Sized {
     ) -> UpdateAndQueryStatement<T, K, U, V>;
 }
 
+// UpdateStatement has four generic parameters:
+// - T: Table which is being updated
+// - U: Where clause
+// - V: Changeset to be applied (default = SetNotCalled)
+// - Ret: Returning clause (default = NoReturningClause)
+//
+// As currently implemented, we only define "UpdateCte" for
+// UpdateStatements using the default "Ret" value. This means
+// the UpdateCte methods can only be invoked for update statements
+// to which a "returning" clause has not yet been added.
+//
+// This allows our implementation of the CTE to overwrite
+// the return behavior of the SQL statement.
 impl<T, K, U, V> UpdateCte<T, K, U, V> for UpdateStatement<T, U, V> {
     fn check_if_exists(
         self,
@@ -48,6 +66,7 @@ impl<T, K, U, V> QueryId for UpdateAndQueryStatement<T, K, U, V> {
 }
 
 /// Result of [`UpdateAndQueryStatement`].
+#[derive(Copy, Clone, PartialEq, Debug)]
 pub enum UpdateAndQueryResult {
     /// The row exists and was updated.
     Updated,
@@ -68,7 +87,7 @@ where
 {
     pub fn execute_and_check(self, conn: &PgConnection) -> Result<UpdateAndQueryResult, diesel::result::Error> {
         let results = self.load::<(K, K)>(conn)?;
-        let ids = results.get(0).unwrap();
+        let ids = results.get(0).ok_or(diesel::result::Error::NotFound)?;
         if ids.0 == ids.1 {
             Ok(UpdateAndQueryResult::Updated)
         } else {
@@ -162,6 +181,13 @@ mod tests {
         pub data: i32,
     }
 
+    // XXX XXX XXX
+    //
+    // The tests are currently broken, but they act as a "does it compile"
+    // check, which is still very useful.
+    //
+    // XXX XXX XXX
+
     #[test]
     fn check_output() {
         use objects::dsl;
@@ -192,6 +218,6 @@ mod tests {
             .check_if_exists(id)
             .execute_and_check(&connection)
             .unwrap();
+        assert_eq!(result, UpdateAndQueryResult::NotUpdatedButExists);
     }
-
 }
