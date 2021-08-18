@@ -74,15 +74,19 @@ pub enum UpdateAndQueryResult {
 impl<T, K, U, V> UpdateAndQueryStatement<T, K, U, V>
 where
     // Necessary bound to compare primary keys:
-    K: PartialEq,
+    K: PartialEq
+        + diesel::Queryable<
+            <<T as diesel::Table>::PrimaryKey as diesel::Expression>::SqlType,
+            diesel::pg::Pg,
+        >,
     // Bounds which ensure an impl of LoadQuery exists:
-    Pg: sql_types::HasSqlType<<Self as AsQuery>::SqlType>,
+    Pg: sql_types::HasSqlType<<<T as Table>::PrimaryKey as Expression>::SqlType>,
     <Self as AsQuery>::Query: QueryFragment<Pg>,
-    (K, K): Queryable<<Self as AsQuery>::SqlType, Pg>,
-    // To actually implement QueryFragment, T must be a Table:
+    // To actually implement QueryFragment, T must be a Table
+    // with a non-null primary key:
     T: Table,
+    <<T as Table>::PrimaryKey as Expression>::SqlType: sql_types::NotNull,
 {
-
     /// Issues the CTE and parses the result.
     ///
     /// The three outcomes are:
@@ -93,9 +97,9 @@ where
         self,
         conn: &PgConnection,
     ) -> Result<UpdateAndQueryResult, diesel::result::Error> {
-        let results = self.load::<(K, K)>(conn)?;
-        let ids = results.get(0).ok_or(diesel::result::Error::NotFound)?;
-        if ids.0 == ids.1 {
+        let results = self.load::<(Option<K>, Option<K>)>(conn)?;
+        let (id0, id1) = results.get(0).ok_or(diesel::result::Error::NotFound)?;
+        if id0 == id1 {
             Ok(UpdateAndQueryResult::Updated)
         } else {
             Ok(UpdateAndQueryResult::NotUpdatedButExists)
@@ -106,10 +110,11 @@ where
 impl<T, K, U, V> Query for UpdateAndQueryStatement<T, K, U, V>
 where
     T: Table,
+    <<T as Table>::PrimaryKey as Expression>::SqlType: sql_types::NotNull,
 {
     type SqlType = (
-        <<T as Table>::PrimaryKey as Expression>::SqlType,
-        <<T as Table>::PrimaryKey as Expression>::SqlType,
+        sql_types::Nullable<<<T as Table>::PrimaryKey as Expression>::SqlType>,
+        sql_types::Nullable<<<T as Table>::PrimaryKey as Expression>::SqlType>,
     );
 }
 
@@ -139,6 +144,7 @@ where
     UpdateStatement<T, U, V>: QueryFragment<Pg>,
 {
     fn walk_ast(&self, mut out: AstPass<Pg>) -> QueryResult<()> {
+        out.unsafe_to_cache_prepared();
         out.push_sql("WITH found AS (");
         let subquery = T::table().find(self.key);
         subquery.walk_ast(out.reborrow())?;
@@ -153,7 +159,7 @@ where
         let name = <T::PrimaryKey as Column>::NAME;
         out.push_sql(" found.");
         out.push_identifier(name)?;
-        out.push_sql(" updated.");
+        out.push_sql(", updated.");
         out.push_identifier(name)?;
 
         out.push_sql(" FROM found LEFT JOIN updated ON");
@@ -239,9 +245,8 @@ mod tests {
             .filter(dsl::gen.gt(3))
             .set(dsl::runtime.eq("new-runtime"))
             .check_if_exists(id)
-            .load::<(Uuid, Uuid)>(&connection)
+            .load::<(Option<Uuid>, Option<Uuid>)>(&connection)
             .unwrap();
         let (_found_id, _updated_id) = result.get(0).unwrap();
     }
-
 }
