@@ -38,10 +38,7 @@ pub trait UpdateCte<T, K, U, V> {
 // the return behavior of the SQL statement.
 impl<T, K, U, V> UpdateCte<T, K, U, V> for UpdateStatement<T, U, V> {
     fn check_if_exists(self, key: K) -> UpdateAndQueryStatement<T, K, U, V> {
-        UpdateAndQueryStatement {
-            update_statement: self,
-            key,
-        }
+        UpdateAndQueryStatement { update_statement: self, key }
     }
 }
 
@@ -57,9 +54,6 @@ pub struct UpdateAndQueryStatement<T, K, U, V> {
 impl<T, K, U, V> QueryId for UpdateAndQueryStatement<T, K, U, V> {
     type QueryId = ();
     const HAS_STATIC_QUERY_ID: bool = false;
-    fn query_id() -> Option<core::any::TypeId> {
-        None
-    }
 }
 
 /// Result of [`UpdateAndQueryStatement`].
@@ -71,21 +65,21 @@ pub enum UpdateAndQueryResult {
     NotUpdatedButExists,
 }
 
+// Representation of Primary Key in Rust.
+type PrimaryKey<T> = <T as diesel::Table>::PrimaryKey;
+// Representation of Primary Key in SQL.
+type SerializedPrimaryKey<T> = <PrimaryKey<T> as diesel::Expression>::SqlType;
+
 impl<T, K, U, V> UpdateAndQueryStatement<T, K, U, V>
 where
-    // Necessary bound to compare primary keys:
-    K: PartialEq
-        + diesel::Queryable<
-            <<T as diesel::Table>::PrimaryKey as diesel::Expression>::SqlType,
-            diesel::pg::Pg,
-        >,
+    // Bounds to compare primary keys and ensure that they're queryable:
+    K: PartialEq + diesel::Queryable<SerializedPrimaryKey<T>, diesel::pg::Pg>,
     // Bounds which ensure an impl of LoadQuery exists:
-    Pg: sql_types::HasSqlType<<<T as Table>::PrimaryKey as Expression>::SqlType>,
+    Pg: sql_types::HasSqlType<SerializedPrimaryKey<T>>,
     <Self as AsQuery>::Query: QueryFragment<Pg>,
-    // To actually implement QueryFragment, T must be a Table
-    // with a non-null primary key:
+    // Bound to implement QueryFragment:
     T: Table,
-    <<T as Table>::PrimaryKey as Expression>::SqlType: sql_types::NotNull,
+    SerializedPrimaryKey<T>: sql_types::NotNull,
 {
     /// Issues the CTE and parses the result.
     ///
@@ -97,8 +91,7 @@ where
         self,
         conn: &PgConnection,
     ) -> Result<UpdateAndQueryResult, diesel::result::Error> {
-        let results = self.load::<(Option<K>, Option<K>)>(conn)?;
-        let (id0, id1) = results.get(0).ok_or(diesel::result::Error::NotFound)?;
+        let (id0, id1) = self.get_result::<(Option<K>, Option<K>)>(conn)?;
         if id0 == id1 {
             Ok(UpdateAndQueryResult::Updated)
         } else {
@@ -110,15 +103,20 @@ where
 impl<T, K, U, V> Query for UpdateAndQueryStatement<T, K, U, V>
 where
     T: Table,
-    <<T as Table>::PrimaryKey as Expression>::SqlType: sql_types::NotNull,
+    SerializedPrimaryKey<T>: sql_types::NotNull,
 {
     type SqlType = (
-        sql_types::Nullable<<<T as Table>::PrimaryKey as Expression>::SqlType>,
-        sql_types::Nullable<<<T as Table>::PrimaryKey as Expression>::SqlType>,
+        sql_types::Nullable<SerializedPrimaryKey<T>>,
+        sql_types::Nullable<SerializedPrimaryKey<T>>,
     );
 }
 
-impl<T, K, U, V> RunQueryDsl<PgConnection> for UpdateAndQueryStatement<T, K, U, V> where T: Table {}
+impl<T, K, U, V> RunQueryDsl<PgConnection>
+    for UpdateAndQueryStatement<T, K, U, V>
+where
+    T: Table,
+{
+}
 
 /// This implementation uses the following CTE:
 ///
@@ -137,14 +135,16 @@ impl<T, K, U, V> RunQueryDsl<PgConnection> for UpdateAndQueryStatement<T, K, U, 
 /// ```
 impl<T, K, U, V> QueryFragment<Pg> for UpdateAndQueryStatement<T, K, U, V>
 where
-    T: HasTable<Table = T> + Table + diesel::query_dsl::methods::FindDsl<K> + Copy,
+    T: HasTable<Table = T>
+        + Table
+        + diesel::query_dsl::methods::FindDsl<K>
+        + Copy,
     K: Copy,
     <T as diesel::query_dsl::methods::FindDsl<K>>::Output: QueryFragment<Pg>,
     <T as Table>::PrimaryKey: diesel::Column,
     UpdateStatement<T, U, V>: QueryFragment<Pg>,
 {
     fn walk_ast(&self, mut out: AstPass<Pg>) -> QueryResult<()> {
-        out.unsafe_to_cache_prepared();
         out.push_sql("WITH found AS (");
         let subquery = T::table().find(self.key);
         subquery.walk_ast(out.reborrow())?;
